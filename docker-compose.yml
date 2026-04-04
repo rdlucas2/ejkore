@@ -1,0 +1,31 @@
+services:
+  # Game client — serves WASM bundle via nginx
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: artifact
+    ports:
+      - "${SERVE_PORT:-8080}:8080"
+    depends_on:
+      - signaling
+    restart: unless-stopped
+
+  # Matchbox signaling server — WebRTC peer discovery
+  signaling:
+    image: jhelsing/matchbox-server:latest
+    command: ["matchbox_server", "0.0.0.0:3536"]
+    ports:
+      - "${SIGNALING_PORT:-3536}:3536"
+    restart: unless-stopped
+
+  # Test runner — run tests in Docker (not a long-running service)
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test
+    volumes:
+      - ./coverage:/out
+    profiles:
+      - test

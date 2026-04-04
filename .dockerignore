@@ -1,0 +1,6 @@
+target/
+dist/pkg/
+.env
+.git/
+coverage/
+trivy-report.*
