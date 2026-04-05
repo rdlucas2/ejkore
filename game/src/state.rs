@@ -50,9 +50,20 @@ pub const AIR_DODGE_INVINCIBLE: u8 = 12;
 pub const AIR_DODGE_SPEED: Fp = Fp::from_int(6);
 
 // Ledge
-pub const LEDGE_GRAB_RANGE_X: Fp = Fp::from_int(30);
-pub const LEDGE_GRAB_RANGE_Y: Fp = Fp::from_int(40);
+pub const LEDGE_GRAB_RANGE_X: Fp = Fp::from_int(20);
+pub const LEDGE_GRAB_RANGE_Y: Fp = Fp::from_int(30);
 pub const LEDGE_INVINCIBILITY: u8 = 30;
+
+// Running
+pub const RUN_START_FRAMES: u8 = 8; // frames of holding direction before run starts
+pub const CROUCH_DROP_FRAMES: u8 = 6; // frames of crouching before dropping through
+pub const COUNTER_FRAMES: u8 = 20; // counter active window
+pub const LANDING_LAG_FRAMES: u8 = 8; // frames of lag when landing during aerial
+pub const METEOR_BOUNCE_THRESHOLD: Fp = Fp::from_int(4); // minimum downward velocity for ground bounce
+
+// Up-B recovery
+pub const UP_SPECIAL_FRAMES: u8 = 20;
+pub const UP_SPECIAL_VELOCITY: Fp = Fp::from_int(-10); // strong upward launch
 
 // Knockback scaling — divides raw knockback to get velocity (higher = gentler launches)
 pub const KB_VELOCITY_SCALE: Fp = Fp::from_int(8);
@@ -126,12 +137,15 @@ pub enum CharacterId {
 pub struct CharacterStats {
     pub weight: Fp,
     pub walk_speed: Fp,
+    pub run_speed: Fp,
     pub air_speed: Fp,
     pub gravity: Fp,
     pub jump_velocity: Fp,
     pub double_jump_velocity: Fp,
     pub fast_fall_speed: Fp,
     pub max_projectiles: usize,
+    pub projectile_speed: Fp,
+    pub projectile_lifetime: u8,
 }
 
 pub fn character_stats(id: CharacterId) -> CharacterStats {
@@ -139,32 +153,41 @@ pub fn character_stats(id: CharacterId) -> CharacterStats {
         CharacterId::Balanced => CharacterStats {
             weight: Fp::from_int(100),
             walk_speed: Fp::from_int(4),
+            run_speed: Fp::from_int(7),
             air_speed: Fp::from_int(3),
             gravity: Fp::from_raw(Fp::ONE.raw() / 2), // 0.5
             jump_velocity: Fp::from_int(-12),
             double_jump_velocity: Fp::from_int(-10),
             fast_fall_speed: Fp::from_int(8),
             max_projectiles: 2,
+            projectile_speed: PROJECTILE_SPEED,
+            projectile_lifetime: PROJECTILE_LIFETIME,
         },
         CharacterId::Ranged => CharacterStats {
             weight: Fp::from_int(95),
             walk_speed: Fp::from_int(3),
+            run_speed: Fp::from_int(6),
             air_speed: Fp::from_int(2),
             gravity: Fp::from_raw(Fp::ONE.raw() * 45 / 100), // 0.45
             jump_velocity: Fp::from_int(-11),
             double_jump_velocity: Fp::from_int(-9),
             fast_fall_speed: Fp::from_int(7),
             max_projectiles: 3,
+            projectile_speed: Fp::from_int(12), // faster projectile
+            projectile_lifetime: PROJECTILE_LIFETIME,
         },
         CharacterId::Rushdown => CharacterStats {
             weight: Fp::from_int(82),
             walk_speed: Fp::from_int(6),
+            run_speed: Fp::from_int(10),
             air_speed: Fp::from_int(4),
             gravity: Fp::from_raw(Fp::ONE.raw() * 60 / 100), // 0.6
             jump_velocity: Fp::from_int(-13),
             double_jump_velocity: Fp::from_int(-11),
             fast_fall_speed: Fp::from_int(10),
             max_projectiles: 1,
+            projectile_speed: Fp::from_int(10), // fast but short range
+            projectile_lifetime: 45, // half the normal lifetime
         },
     }
 }
@@ -179,11 +202,13 @@ pub enum AttackType {
     ForwardSmash,
     UpSmash,
     DownSmash,
+    DashAttack,
     NeutralAir,
     ForwardAir,
     BackAir,
     UpAir,
     DownAir,
+    SideSpecial,
 }
 
 /// Frame data for an attack type
@@ -232,25 +257,32 @@ pub fn attack_data(attack_type: AttackType) -> AttackData {
             hitbox_offset_x: Fp::from_int(15), hitbox_offset_y: Fp::from_int(-5),
         },
         AttackType::ForwardSmash => AttackData {
-            startup: 12, active: 3, recovery: 22,
-            damage: Fp::from_int(16), base_kb: Fp::from_int(40), kb_scaling: Fp::from_int(90),
+            startup: 16, active: 3, recovery: 32,
+            damage: Fp::from_int(22), base_kb: Fp::from_int(50), kb_scaling: Fp::from_int(100),
             kb_angle: 35,
             hitbox_w: Fp::from_int(50), hitbox_h: Fp::from_int(25),
             hitbox_offset_x: Fp::from_int(25), hitbox_offset_y: Fp::from_int(-30),
         },
         AttackType::UpSmash => AttackData {
-            startup: 10, active: 4, recovery: 20,
-            damage: Fp::from_int(14), base_kb: Fp::from_int(35), kb_scaling: Fp::from_int(85),
+            startup: 12, active: 4, recovery: 28,
+            damage: Fp::from_int(18), base_kb: Fp::from_int(45), kb_scaling: Fp::from_int(95),
             kb_angle: 90,
             hitbox_w: Fp::from_int(40), hitbox_h: Fp::from_int(40),
             hitbox_offset_x: Fp::from_int(0), hitbox_offset_y: Fp::from_int(-70),
         },
         AttackType::DownSmash => AttackData {
-            startup: 8, active: 4, recovery: 20,
-            damage: Fp::from_int(13), base_kb: Fp::from_int(30), kb_scaling: Fp::from_int(80),
+            startup: 10, active: 4, recovery: 28,
+            damage: Fp::from_int(20), base_kb: Fp::from_int(42), kb_scaling: Fp::from_int(90),
             kb_angle: 30,
             hitbox_w: Fp::from_int(55), hitbox_h: Fp::from_int(15),
             hitbox_offset_x: Fp::from_int(10), hitbox_offset_y: Fp::from_int(-5),
+        },
+        AttackType::DashAttack => AttackData {
+            startup: 5, active: 4, recovery: 14,
+            damage: Fp::from_int(10), base_kb: Fp::from_int(30), kb_scaling: Fp::from_int(65),
+            kb_angle: 50,
+            hitbox_w: Fp::from_int(50), hitbox_h: Fp::from_int(25),
+            hitbox_offset_x: Fp::from_int(20), hitbox_offset_y: Fp::from_int(-30),
         },
         AttackType::NeutralAir => AttackData {
             startup: 4, active: 6, recovery: 10,
@@ -281,11 +313,18 @@ pub fn attack_data(attack_type: AttackType) -> AttackData {
             hitbox_offset_x: Fp::from_int(0), hitbox_offset_y: Fp::from_int(-65),
         },
         AttackType::DownAir => AttackData {
-            startup: 8, active: 4, recovery: 16,
-            damage: Fp::from_int(11), base_kb: Fp::from_int(28), kb_scaling: Fp::from_int(60),
-            kb_angle: 270, // spike downward
-            hitbox_w: Fp::from_int(30), hitbox_h: Fp::from_int(25),
+            startup: 10, active: 3, recovery: 18,
+            damage: Fp::from_int(14), base_kb: Fp::from_int(40), kb_scaling: Fp::from_int(90),
+            kb_angle: 270, // meteor smash — straight down
+            hitbox_w: Fp::from_int(30), hitbox_h: Fp::from_int(30),
             hitbox_offset_x: Fp::from_int(0), hitbox_offset_y: Fp::from_int(0),
+        },
+        AttackType::SideSpecial => AttackData {
+            startup: 6, active: 5, recovery: 16,
+            damage: Fp::from_int(12), base_kb: Fp::from_int(35), kb_scaling: Fp::from_int(80),
+            kb_angle: 45,
+            hitbox_w: Fp::from_int(40), hitbox_h: Fp::from_int(25),
+            hitbox_offset_x: Fp::from_int(35), hitbox_offset_y: Fp::from_int(0),
         },
     }
 }
@@ -304,6 +343,9 @@ pub enum ActionState {
     Rolling { frames_left: u8, direction: i8 }, // direction: 1 = right, -1 = left
     AirDodge { frames_left: u8 },
     LedgeHang,
+    SpecialMove { frames_left: u8 },
+    Counter { frames_left: u8 },
+    Freefall,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,6 +380,12 @@ pub struct PlayerState {
     pub shield_held: bool,
     pub current_attack: AttackType,
     pub has_ledge_grab: bool, // true = already used ledge grab this airborne state
+    pub has_up_special: bool, // true = already used up-B this airborne state
+    pub is_running: bool,
+    pub run_frames: u8, // how many consecutive frames direction held
+    pub is_crouching: bool,
+    pub drop_through_frames: u8,
+    pub drop_through_active: bool, // temporarily ignore ground collision
     pub character: CharacterId,
 }
 
@@ -372,6 +420,12 @@ fn new_player(position_x: Fp, facing_right: bool) -> PlayerState {
         shield_held: false,
         current_attack: AttackType::Jab,
         has_ledge_grab: false,
+        has_up_special: false,
+        is_running: false,
+        is_crouching: false,
+        drop_through_frames: 0,
+        drop_through_active: false,
+        run_frames: 0,
         character: CharacterId::Balanced,
     }
 }
@@ -411,6 +465,8 @@ fn respawn_player(player: &mut PlayerState) {
     player.jumps_remaining = MAX_JUMPS;
     player.action = ActionState::Idle;
     player.shield_hp = SHIELD_MAX_HP;
+    player.has_up_special = false;
+    player.has_ledge_grab = false;
 }
 
 fn in_blast_zone(player: &PlayerState) -> bool {
@@ -586,6 +642,18 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
                     player.action = ActionState::AirDodge { frames_left: frames_left - 1 };
                 }
             }
+            ActionState::SpecialMove { frames_left } => {
+                if frames_left <= 1 {
+                    player.action = ActionState::Freefall;
+                    player.velocity_y = Fp::ZERO;
+                } else {
+                    player.action = ActionState::SpecialMove { frames_left: frames_left - 1 };
+                }
+            }
+            ActionState::Freefall => {
+                // Can only air drift, no attacks or specials
+                // Freefall ends on landing (handled in ground collision)
+            }
             ActionState::LedgeHang => {
                 // Ledge options
                 if input.pressed(PlayerInput::UP) {
@@ -609,12 +677,33 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
                         player.position_x = STAGE_RIGHT + Fp::from_int(5);
                     }
                 } else if input.pressed(PlayerInput::ATTACK) {
-                    // Let go and attack
-                    player.action = ActionState::Idle;
+                    // Getup attack — climb onto stage and attack with i-frames
+                    if player.position_x <= STAGE_LEFT {
+                        player.position_x = STAGE_LEFT + Fp::from_int(30);
+                        player.facing_right = true;
+                    } else {
+                        player.position_x = STAGE_RIGHT - Fp::from_int(30);
+                        player.facing_right = false;
+                    }
+                    player.position_y = GROUND_Y;
+                    player.grounded = true;
+                    player.jumps_remaining = MAX_JUMPS;
+                    let data = attack_data(AttackType::ForwardTilt); // getup attack uses ftilt data
+                    player.current_attack = AttackType::ForwardTilt;
+                    player.action = ActionState::AttackStartup { frames_left: data.startup };
+                    player.hit_this_attack = false;
+                    player.invincibility_frames = 10;
                 } else {
                     // Stay hanging — no gravity, no movement
                     player.velocity_x = Fp::ZERO;
                     player.velocity_y = Fp::ZERO;
+                }
+            }
+            ActionState::Counter { frames_left } => {
+                if frames_left <= 1 {
+                    player.action = ActionState::Idle;
+                } else {
+                    player.action = ActionState::Counter { frames_left: frames_left - 1 };
                 }
             }
             ActionState::Idle => {}
@@ -658,13 +747,34 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
                 // Holding shield (not fresh press) — maintain shield
                 player.action = ActionState::Shielding;
             }
+            // Up-B recovery (fresh special + up, airborne, not used yet)
+            else if input.pressed(PlayerInput::SPECIAL) && !player.special_held
+                && input.pressed(PlayerInput::UP) && !player.grounded && !player.has_up_special
+            {
+                player.action = ActionState::SpecialMove { frames_left: UP_SPECIAL_FRAMES };
+                player.velocity_y = UP_SPECIAL_VELOCITY;
+                player.velocity_x = Fp::ZERO;
+                player.has_up_special = true;
+            }
+            // Down-B counter (fresh special + down)
+            else if input.pressed(PlayerInput::SPECIAL) && !player.special_held
+                && input.pressed(PlayerInput::DOWN)
+            {
+                player.action = ActionState::Counter { frames_left: COUNTER_FRAMES };
+            }
             // Attack (on fresh press)
             else if input.pressed(PlayerInput::ATTACK) && !player.attack_held {
-                let atk_type = resolve_attack_type(input, player.grounded, player.facing_right);
+                let atk_type = if player.is_running {
+                    AttackType::DashAttack
+                } else {
+                    resolve_attack_type(input, player.grounded, player.facing_right)
+                };
                 let data = attack_data(atk_type);
                 player.current_attack = atk_type;
                 player.action = ActionState::AttackStartup { frames_left: data.startup };
                 player.hit_this_attack = false;
+                player.is_running = false;
+                player.run_frames = 0;
             }
             // Grab (on fresh press)
             else if input.pressed(PlayerInput::GRAB) && !player.grab_held {
@@ -677,17 +787,59 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
 
         // Movement (only when actionable or in certain states)
         let can_move = matches!(player.action, ActionState::Idle | ActionState::Shielding);
+
+        // Crouch: hold down while grounded and actionable
+        player.is_crouching = can_move && player.grounded && input.pressed(PlayerInput::DOWN)
+            && !matches!(player.action, ActionState::Shielding);
+        if !player.is_crouching {
+            player.drop_through_frames = 0;
+        }
+
         if can_move {
             if player.grounded {
-                if !matches!(player.action, ActionState::Shielding) {
-                    if input.pressed(PlayerInput::LEFT) {
-                        player.velocity_x = -stats.walk_speed;
-                        player.facing_right = false;
-                    } else if input.pressed(PlayerInput::RIGHT) {
-                        player.velocity_x = stats.walk_speed;
-                        player.facing_right = true;
+                if player.is_crouching {
+                    player.velocity_x = Fp::ZERO;
+                    player.is_running = false;
+                    player.run_frames = 0;
+                    player.drop_through_frames += 1;
+                    if player.drop_through_frames > CROUCH_DROP_FRAMES {
+                        // Drop through platform
+                        player.grounded = false;
+                        player.is_crouching = false;
+                        player.drop_through_frames = 0;
+                        player.drop_through_active = true;
+                        player.position_y = player.position_y + Fp::ONE;
+                    }
+                } else if !matches!(player.action, ActionState::Shielding) {
+                    let holding_left = input.pressed(PlayerInput::LEFT);
+                    let holding_right = input.pressed(PlayerInput::RIGHT);
+                    let holding_same_dir = (holding_left && !player.facing_right)
+                        || (holding_right && player.facing_right);
+
+                    if holding_left || holding_right {
+                        if holding_same_dir {
+                            player.run_frames = player.run_frames.saturating_add(1);
+                            if player.run_frames >= RUN_START_FRAMES {
+                                player.is_running = true;
+                            }
+                        } else {
+                            // Changed direction — reset run
+                            player.run_frames = 1;
+                            player.is_running = false;
+                        }
+
+                        let speed = if player.is_running { stats.run_speed } else { stats.walk_speed };
+                        if holding_left {
+                            player.velocity_x = -speed;
+                            player.facing_right = false;
+                        } else {
+                            player.velocity_x = speed;
+                            player.facing_right = true;
+                        }
                     } else {
                         player.velocity_x = Fp::ZERO;
+                        player.is_running = false;
+                        player.run_frames = 0;
                     }
                 } else {
                     player.velocity_x = Fp::ZERO;
@@ -696,21 +848,43 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
                 // Air drift
                 if input.pressed(PlayerInput::LEFT) {
                     player.velocity_x = -stats.air_speed;
+                    player.facing_right = false;
                 } else if input.pressed(PlayerInput::RIGHT) {
                     player.velocity_x = stats.air_speed;
+                    player.facing_right = true;
                 }
             }
 
             // Jumping (only on fresh press, not held)
             let jump_pressed = input.pressed(PlayerInput::UP);
-            if jump_pressed && !player.jump_held && player.jumps_remaining > 0 {
-                if player.grounded {
+            if jump_pressed && !player.jump_held {
+                // Wall jump check: airborne, touching stage wall, below ground level
+                let at_left_wall = !player.grounded
+                    && player.position_x <= STAGE_LEFT + Fp::from_int(5)
+                    && player.position_y < GROUND_Y
+                    && player.position_y > GROUND_Y - Fp::from_int(200);
+                let at_right_wall = !player.grounded
+                    && player.position_x >= STAGE_RIGHT - Fp::from_int(5)
+                    && player.position_y < GROUND_Y
+                    && player.position_y > GROUND_Y - Fp::from_int(200);
+
+                if at_left_wall {
                     player.velocity_y = stats.jump_velocity;
-                    player.grounded = false;
-                } else {
-                    player.velocity_y = stats.double_jump_velocity;
+                    player.velocity_x = Fp::from_int(6); // push away from wall
+                    player.facing_right = true;
+                } else if at_right_wall {
+                    player.velocity_y = stats.jump_velocity;
+                    player.velocity_x = Fp::from_int(-6);
+                    player.facing_right = false;
+                } else if player.jumps_remaining > 0 {
+                    if player.grounded {
+                        player.velocity_y = stats.jump_velocity;
+                        player.grounded = false;
+                    } else {
+                        player.velocity_y = stats.double_jump_velocity;
+                    }
+                    player.jumps_remaining -= 1;
                 }
-                player.jumps_remaining -= 1;
                 if matches!(player.action, ActionState::Shielding) {
                     player.action = ActionState::Idle;
                 }
@@ -740,8 +914,8 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
             continue;
         }
 
-        // Gravity
-        if !player.grounded {
+        // Gravity (skip during up-B — the move provides its own velocity)
+        if !player.grounded && !matches!(player.action, ActionState::SpecialMove { .. }) {
             player.velocity_y = player.velocity_y + stats.gravity;
         }
 
@@ -749,20 +923,19 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
         player.position_x = player.position_x + player.velocity_x;
         player.position_y = player.position_y + player.velocity_y;
 
-        // Ledge grab detection — works from any side, doesn't require Idle,
-        // only needs the player to be airborne and not already used their grab
+        // Ledge grab detection
         if !player.grounded
             && !player.has_ledge_grab
-            && !matches!(player.action, ActionState::LedgeHang)
+            && player.velocity_y >= Fp::ZERO
+            && can_act(player)
         {
             let near_ground = player.position_y >= GROUND_Y - LEDGE_GRAB_RANGE_Y
                 && player.position_y <= GROUND_Y + LEDGE_GRAB_RANGE_Y;
 
-            // Only grab from the outside of the ledge (not from on top of the stage)
-            let near_right_ledge = player.position_x > STAGE_RIGHT
+            let near_right_ledge = player.position_x >= STAGE_RIGHT - LEDGE_GRAB_RANGE_X
                 && player.position_x <= STAGE_RIGHT + LEDGE_GRAB_RANGE_X;
-            let near_left_ledge = player.position_x < STAGE_LEFT
-                && player.position_x >= STAGE_LEFT - LEDGE_GRAB_RANGE_X;
+            let near_left_ledge = player.position_x >= STAGE_LEFT - LEDGE_GRAB_RANGE_X
+                && player.position_x <= STAGE_LEFT + LEDGE_GRAB_RANGE_X;
 
             if near_ground && (near_right_ledge || near_left_ledge) {
                 player.action = ActionState::LedgeHang;
@@ -772,10 +945,8 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
                 player.has_ledge_grab = true;
                 if near_right_ledge {
                     player.position_x = STAGE_RIGHT;
-                    player.facing_right = false; // face inward
                 } else {
                     player.position_x = STAGE_LEFT;
-                    player.facing_right = true; // face inward
                 }
                 player.position_y = GROUND_Y;
                 continue;
@@ -789,22 +960,63 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
                 respawn_player(player);
             }
         } else {
-            // Ground collision — only land if on top of the platform
-            // Must be within stage X bounds AND coming from above (not below)
+            // Clear drop-through when below stage level
+            if player.drop_through_active && player.position_y > GROUND_Y + Fp::from_int(20) {
+                player.drop_through_active = false;
+            }
+            // Ground collision (skip during drop-through)
             if player.position_y >= GROUND_Y
-                && player.velocity_y >= Fp::ZERO
                 && player.position_x >= STAGE_LEFT
                 && player.position_x <= STAGE_RIGHT
-                // Don't snap if player is far below the stage (was knocked under)
-                && player.position_y <= GROUND_Y + Fp::from_int(10)
+                && !player.drop_through_active
             {
+                let just_landed = !player.grounded;
+                let was_in_hitstun = just_landed && matches!(player.action, ActionState::Hitstun { .. });
+                let was_aerial_attack = just_landed
+                    && matches!(player.action,
+                        ActionState::AttackStartup { .. } | ActionState::AttackActive { .. } | ActionState::AttackRecovery { .. })
+                    && matches!(player.current_attack,
+                        AttackType::NeutralAir | AttackType::ForwardAir | AttackType::BackAir | AttackType::UpAir | AttackType::DownAir);
+
+                // Meteor bounce: if spiked downward hard enough, bounce off the ground
+                // (but teching overrides the bounce)
+                let can_tech = was_in_hitstun && input.pressed(PlayerInput::SHIELD);
+                if was_in_hitstun && player.velocity_y > METEOR_BOUNCE_THRESHOLD && !can_tech {
+                    player.position_y = GROUND_Y;
+                    // Bounce: reverse and decay vertical velocity
+                    player.velocity_y = -(player.velocity_y * Fp::from_raw(Fp::ONE.raw() * 60 / 100));
+                    player.velocity_x = player.velocity_x * Fp::from_raw(Fp::ONE.raw() * 80 / 100);
+                    player.grounded = false;
+                    continue;
+                }
+
                 player.position_y = GROUND_Y;
                 player.velocity_y = Fp::ZERO;
                 player.grounded = true;
                 player.jumps_remaining = MAX_JUMPS;
                 player.has_ledge_grab = false;
+                player.has_up_special = false;
+                if was_aerial_attack {
+                    // Landing lag — shorter than full recovery
+                    player.action = ActionState::AttackRecovery { frames_left: LANDING_LAG_FRAMES };
+                    player.velocity_x = Fp::ZERO;
+                } else if can_tech {
+                    // Tech: recover on landing
+                    let holding_left = input.pressed(PlayerInput::LEFT);
+                    let holding_right = input.pressed(PlayerInput::RIGHT);
+                    if holding_left || holding_right {
+                        let dir: i8 = if holding_right { 1 } else { -1 };
+                        player.action = ActionState::Rolling { frames_left: ROLL_FRAMES, direction: dir };
+                        player.invincibility_frames = ROLL_INVINCIBLE;
+                    } else {
+                        player.action = ActionState::Idle;
+                    }
+                    player.velocity_x = Fp::ZERO;
+                } else if matches!(player.action, ActionState::Freefall) {
+                    player.action = ActionState::Idle;
+                }
             }
-            // Stage edges (prevent walking off platform — only if grounded)
+            // Stage edges (prevent walking off platform)
             if player.grounded {
                 if player.position_x < STAGE_LEFT {
                     player.position_x = STAGE_LEFT;
@@ -822,21 +1034,40 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
         let fresh_press = special_pressed && !state.players[i].special_held;
         state.players[i].special_held = special_pressed;
 
-        if fresh_press
-            && can_act(&state.players[i])
-            && state.players[i].stocks > 0
-            && count_player_projectiles(&state.projectiles, i as u8) < character_stats(state.players[i].character).max_projectiles
-        {
-            // Find empty slot
-            if let Some(slot) = state.projectiles.iter_mut().find(|p| !p.active) {
-                let player = &state.players[i];
-                let dir = if player.facing_right { Fp::ONE } else { -Fp::ONE };
-                slot.active = true;
-                slot.owner = i as u8;
-                slot.position_x = player.position_x + Fp::from_int(30) * dir;
-                slot.position_y = player.position_y - Fp::from_int(30);
-                slot.velocity_x = PROJECTILE_SPEED * dir;
-                slot.lifetime = PROJECTILE_LIFETIME;
+        let holding_side = input.pressed(PlayerInput::LEFT) || input.pressed(PlayerInput::RIGHT);
+        let holding_up = input.pressed(PlayerInput::UP);
+        let stats = character_stats(state.players[i].character);
+
+        if fresh_press && can_act(&state.players[i]) && state.players[i].stocks > 0 {
+            if holding_side && !holding_up {
+                // Side-B: lunging attack
+                let data = attack_data(AttackType::SideSpecial);
+                state.players[i].current_attack = AttackType::SideSpecial;
+                state.players[i].action = ActionState::AttackStartup { frames_left: data.startup };
+                state.players[i].hit_this_attack = false;
+                // Set facing direction
+                if input.pressed(PlayerInput::LEFT) {
+                    state.players[i].facing_right = false;
+                } else {
+                    state.players[i].facing_right = true;
+                }
+                // Lunge velocity
+                let dir = if state.players[i].facing_right { Fp::ONE } else { -Fp::ONE };
+                state.players[i].velocity_x = Fp::from_int(6) * dir;
+            } else if !holding_up
+                && count_player_projectiles(&state.projectiles, i as u8) < stats.max_projectiles
+            {
+                // Neutral-B: spawn projectile
+                if let Some(slot) = state.projectiles.iter_mut().find(|p| !p.active) {
+                    let player = &state.players[i];
+                    let dir = if player.facing_right { Fp::ONE } else { -Fp::ONE };
+                    slot.active = true;
+                    slot.owner = i as u8;
+                    slot.position_x = player.position_x + Fp::from_int(30) * dir;
+                    slot.position_y = player.position_y - Fp::from_int(30);
+                    slot.velocity_x = stats.projectile_speed * dir;
+                    slot.lifetime = stats.projectile_lifetime;
+                }
             }
         }
     }
@@ -888,7 +1119,22 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
                     damage: data.damage,
                 };
 
-                if matches!(defender.action, ActionState::Shielding) {
+                if matches!(defender.action, ActionState::Counter { .. }) {
+                    // Counter! Reflect damage back to attacker with 1.3x multiplier
+                    let counter_hit = HitData {
+                        base_knockback: hit.base_knockback * Fp::from_raw(Fp::ONE.raw() * 13 / 10),
+                        knockback_scaling: hit.knockback_scaling,
+                        knockback_angle: hit.knockback_angle,
+                        damage: hit.damage * Fp::from_raw(Fp::ONE.raw() * 13 / 10),
+                    };
+                    apply_hit(
+                        &mut state.players[attacker_idx],
+                        &counter_hit,
+                        inputs[attacker_idx],
+                        defender.facing_right,
+                    );
+                    state.players[defender_idx].action = ActionState::Idle;
+                } else if matches!(defender.action, ActionState::Shielding) {
                     // Hit shield
                     let d = &mut state.players[defender_idx];
                     if d.shield_hp > SHIELD_DEPLETE_PER_HIT {
@@ -913,40 +1159,37 @@ pub fn advance_frame(state: &mut GameState, inputs: [PlayerInput; MAX_PLAYERS]) 
         // Grab hit check
         if matches!(attacker.action, ActionState::Grabbing { .. }) {
             let grab_box = attack_hitbox(attacker); // reuse attack hitbox for grab range
-            if grab_box.overlaps(&defender_hurtbox) {
-                if matches!(defender.action, ActionState::Shielding) {
-                    // Grab beats shield — throw
-                    let throw_hit = HitData {
-                        base_knockback: Fp::from_int(30),
-                        knockback_scaling: Fp::from_int(60),
-                        knockback_angle: 80,
-                        damage: Fp::from_int(7),
+            if grab_box.overlaps(&defender_hurtbox)
+                && (matches!(defender.action, ActionState::Shielding | ActionState::Idle))
+            {
+                // Determine throw direction from attacker's held input
+                let atk_input = inputs[attacker_idx];
+                let (kb_angle, base_kb, kb_scaling, dmg, throw_facing) =
+                    if atk_input.pressed(PlayerInput::UP) {
+                        (90, 30, 70, 7, attacker.facing_right) // up throw
+                    } else if atk_input.pressed(PlayerInput::DOWN) {
+                        (30, 20, 50, 5, attacker.facing_right) // down throw — low angle, combo starter
+                    } else if (atk_input.pressed(PlayerInput::LEFT) && attacker.facing_right)
+                        || (atk_input.pressed(PlayerInput::RIGHT) && !attacker.facing_right)
+                    {
+                        (135, 30, 65, 8, attacker.facing_right) // back throw — behind attacker
+                    } else {
+                        (45, 28, 60, 6, attacker.facing_right) // forward throw (default)
                     };
-                    state.players[defender_idx].action = ActionState::Idle;
-                    apply_hit(
-                        &mut state.players[defender_idx],
-                        &throw_hit,
-                        inputs[defender_idx],
-                        attacker.facing_right,
-                    );
-                    state.players[attacker_idx].action = ActionState::Idle;
-                } else if matches!(defender.action, ActionState::Idle) {
-                    // Normal grab on idle opponent
-                    let throw_hit = HitData {
-                        base_knockback: Fp::from_int(25),
-                        knockback_scaling: Fp::from_int(50),
-                        knockback_angle: 70,
-                        damage: Fp::from_int(5),
-                    };
-                    apply_hit(
-                        &mut state.players[defender_idx],
-                        &throw_hit,
-                        inputs[defender_idx],
-                        attacker.facing_right,
-                    );
-                    state.players[attacker_idx].action = ActionState::Idle;
-                }
-                // Grab whiffs on attacking/hitstun opponents
+                let throw_hit = HitData {
+                    base_knockback: Fp::from_int(base_kb),
+                    knockback_scaling: Fp::from_int(kb_scaling),
+                    knockback_angle: kb_angle,
+                    damage: Fp::from_int(dmg),
+                };
+                state.players[defender_idx].action = ActionState::Idle;
+                apply_hit(
+                    &mut state.players[defender_idx],
+                    &throw_hit,
+                    inputs[defender_idx],
+                    throw_facing,
+                );
+                state.players[attacker_idx].action = ActionState::Idle;
             }
         }
     }

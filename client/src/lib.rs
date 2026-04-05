@@ -402,6 +402,42 @@ fn draw_fight(ctx: &CanvasRenderingContext2d, state: &GameState) {
             ctx.set_text_align("start");
         }
 
+        // Freefall indicator
+        if matches!(player.action, ActionState::Freefall) {
+            ctx.set_fill_style_str("rgba(255,100,100,0.5)");
+            ctx.set_font("10px monospace");
+            ctx.set_text_align("center");
+            let _ = ctx.fill_text("FALL", px, py - ph - 5.0);
+            ctx.set_text_align("start");
+        }
+
+        // Special move indicator
+        if matches!(player.action, ActionState::SpecialMove { .. }) {
+            ctx.set_fill_style_str("rgba(255,200,0,0.5)");
+            ctx.set_font("10px monospace");
+            ctx.set_text_align("center");
+            let _ = ctx.fill_text("UP-B", px, py - ph - 5.0);
+            ctx.set_text_align("start");
+        }
+
+        // Crouch visual — squish the player rectangle
+        if player.is_crouching {
+            ctx.set_fill_style_str(colors[i]);
+            ctx.fill_rect(px - pw / 2.0 - 3.0, py - ph * 0.6, pw + 6.0, ph * 0.6);
+        }
+
+        // Running trail
+        if player.is_running {
+            ctx.set_fill_style_str("rgba(255,255,255,0.15)");
+            let trail_dir = if player.facing_right { -1.0 } else { 1.0 };
+            for t in 1..4 {
+                let alpha = 0.15 - t as f64 * 0.04;
+                ctx.set_global_alpha(alpha);
+                ctx.fill_rect(px - pw / 2.0 + trail_dir * t as f64 * 8.0, py - ph, pw, ph);
+            }
+            ctx.set_global_alpha(1.0);
+        }
+
         // Face direction indicator
         ctx.set_fill_style_str("#ffffff");
         ctx.begin_path();
@@ -429,7 +465,24 @@ fn draw_fight(ctx: &CanvasRenderingContext2d, state: &GameState) {
             let hb_offset_x = data.hitbox_offset_x.to_int() as f64;
             let hb_offset_y = data.hitbox_offset_y.to_int() as f64;
             let hb_x = if facing { px + hb_offset_x } else { px - hb_offset_x - hb_w };
-            ctx.set_fill_style_str("rgba(255, 255, 0, 0.5)");
+            let hitbox_color = match player.current_attack {
+                // Jab/tilts — yellow
+                AttackType::Jab | AttackType::ForwardTilt | AttackType::UpTilt | AttackType::DownTilt
+                    => "rgba(255, 255, 0, 0.5)",
+                // Smash attacks — orange/red (heavy)
+                AttackType::ForwardSmash | AttackType::UpSmash | AttackType::DownSmash
+                    => "rgba(255, 100, 30, 0.6)",
+                // Aerials — cyan
+                AttackType::NeutralAir | AttackType::ForwardAir | AttackType::BackAir | AttackType::UpAir
+                    => "rgba(0, 220, 255, 0.5)",
+                // Meteor smash (dair) — purple
+                AttackType::DownAir => "rgba(180, 50, 255, 0.6)",
+                // Dash attack — green
+                AttackType::DashAttack => "rgba(100, 255, 100, 0.5)",
+                // Side special — magenta
+                AttackType::SideSpecial => "rgba(255, 50, 200, 0.5)",
+            };
+            ctx.set_fill_style_str(hitbox_color);
             ctx.fill_rect(hb_x, py + hb_offset_y, hb_w, hb_h);
         }
 
