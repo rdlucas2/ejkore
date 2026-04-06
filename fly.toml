@@ -1,8 +1,12 @@
+# fly.toml app configuration file generated for ejkore on 2026-04-06T03:05:42Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
 app = 'ejkore'
-primary_region = 'ord'
+primary_region = 'iad'
 
 [build]
-  dockerfile = 'Dockerfile.fly'
 
 [http_service]
   internal_port = 8080
@@ -10,8 +14,10 @@ primary_region = 'ord'
   auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
+  processes = ['app']
 
 [[vm]]
-  memory = '512mb'
+  memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
+  memory_mb = 1024
