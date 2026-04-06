@@ -96,7 +96,8 @@ fn char_desc(id: CharacterId) -> &'static str {
 
 const CHECKSUM_INTERVAL: u32 = 30; // send checksum every 30 frames
 /// Build the signaling server URL from the current page's host.
-/// Checks for a `?signal=host:port` query param first, otherwise uses the page's hostname on port 3536.
+/// Priority: ?signal=host:port query param > same-origin /ws path.
+/// Detects HTTPS and uses wss:// accordingly.
 fn signaling_url() -> String {
     let window = web_sys::window().unwrap();
     let location = window.location();
@@ -112,9 +113,17 @@ fn signaling_url() -> String {
         }
     }
 
-    // Default: same hostname as the page, port 3536
-    let host = location.hostname().unwrap_or_else(|_| "localhost".into());
-    format!("ws://{}:3536", host)
+    let protocol = location.protocol().unwrap_or_else(|_| "http:".into());
+    let host = location.host().unwrap_or_else(|_| "localhost".into());
+
+    if protocol == "https:" {
+        // Production / Fly.io: signaling proxied at /ws on same origin
+        format!("wss://{}/ws", host)
+    } else {
+        // Local dev: signaling on separate port
+        let hostname = location.hostname().unwrap_or_else(|_| "localhost".into());
+        format!("ws://{}:3536", hostname)
+    }
 }
 
 impl AppState {
