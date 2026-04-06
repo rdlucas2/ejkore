@@ -38,23 +38,25 @@ RUN rm -rf target/release/deps/ejkore* target/release/.fingerprint/ejkore* \
 RUN wasm-pack build client --target web --out-dir /app/dist/pkg
 
 # =============================================================================
-# Stage 2 — runtime: nginx + matchbox signaling in one container
+# Stage 2 — grab matchbox_server binary from its official Docker image
+# =============================================================================
+FROM --platform=linux/amd64 jhelsing/matchbox-server:latest AS matchbox
+
+# =============================================================================
+# Stage 3 — runtime: nginx + matchbox signaling in one container
 # =============================================================================
 FROM nginx:1.27.3-alpine AS runtime
 
-# Install matchbox_server
-RUN apk add --no-cache curl && \
-    curl -L https://github.com/johanhelsing/matchbox/releases/latest/download/matchbox_server-x86_64-unknown-linux-musl.tar.gz \
-    | tar xz -C /usr/local/bin/ && \
-    apk del curl
+# Copy matchbox_server binary from official image (glibc-linked)
+COPY --from=matchbox /usr/local/bin/matchbox_server /usr/local/bin/matchbox_server
+RUN chmod +x /usr/local/bin/matchbox_server
 
-# Install supervisord to run both processes
-RUN apk add --no-cache supervisor
+# matchbox_server needs glibc — install compatibility layer on alpine
+RUN apk add --no-cache gcompat supervisor
 
 # Copy static web files
 COPY dist/index.html /usr/share/nginx/html/index.html
 COPY dist/*.mp3 /usr/share/nginx/html/
-COPY dist/*.ogg /usr/share/nginx/html/ 2>/dev/null || true
 
 # Copy WASM bundle from build stage
 COPY --from=build /app/dist/pkg /usr/share/nginx/html/pkg
