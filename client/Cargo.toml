@@ -17,5 +17,20 @@ web-sys = { version = "0.3", features = [
     "KeyboardEvent",
     "Performance",
     "EventTarget",
+    "Navigator",
+    "Gamepad",
+    "GamepadButton",
+    "GamepadEvent",
+    "TouchEvent",
+    "Touch",
+    "TouchList",
+    "Storage",
+    "HtmlElement",
+    "CssStyleDeclaration",
+    "HtmlAudioElement",
+    "Location",
+    "MediaError",
 ] }
 js-sys = "0.3"
+matchbox_socket = "0.10"
+wasm-bindgen-futures = "0.4"

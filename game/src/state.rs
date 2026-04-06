@@ -95,7 +95,7 @@ pub const PROJECTILE_SIZE: Fp = Fp::from_int(12);
 pub const MAX_PROJECTILES_PER_PLAYER: usize = 2;
 
 /// Bitfield for player input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct PlayerInput(pub u16);
 
 impl PlayerInput {
@@ -126,7 +126,7 @@ impl PlayerInput {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum CharacterId {
     #[default]
     Balanced,
@@ -192,7 +192,7 @@ pub fn character_stats(id: CharacterId) -> CharacterStats {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum AttackType {
     #[default]
     Jab,
@@ -329,7 +329,7 @@ pub fn attack_data(attack_type: AttackType) -> AttackData {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActionState {
     Idle,
     AttackStartup { frames_left: u8 },
@@ -348,7 +348,7 @@ pub enum ActionState {
     Freefall,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Projectile {
     pub active: bool,
     pub owner: u8,
@@ -358,7 +358,7 @@ pub struct Projectile {
     pub lifetime: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PlayerState {
     pub position_x: Fp,
     pub position_y: Fp,
@@ -389,7 +389,7 @@ pub struct PlayerState {
     pub character: CharacterId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GameState {
     pub players: [PlayerState; MAX_PLAYERS],
     pub projectiles: [Projectile; MAX_PROJECTILES],
@@ -452,6 +452,14 @@ pub fn default_state() -> GameState {
         match_over: false,
         winner: None,
     }
+}
+
+/// Compute a checksum of the full game state for desync detection.
+pub fn state_checksum(state: &GameState) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    state.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn respawn_player(player: &mut PlayerState) {

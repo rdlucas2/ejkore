@@ -1,5 +1,6 @@
 pub mod combat;
 pub mod fixed;
+pub mod rollback;
 pub mod state;
 
 #[cfg(test)]
