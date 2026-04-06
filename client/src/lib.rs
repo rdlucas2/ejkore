@@ -86,6 +86,15 @@ fn char_name(id: CharacterId) -> &'static str {
     }
 }
 
+fn char_from_id(id: u8) -> CharacterId {
+    match id {
+        0 => CharacterId::Balanced,
+        1 => CharacterId::Ranged,
+        2 => CharacterId::Rushdown,
+        _ => CharacterId::Balanced,
+    }
+}
+
 fn char_desc(id: CharacterId) -> &'static str {
     match id {
         CharacterId::Balanced => "Medium speed, medium weight. Well-rounded.",
@@ -515,13 +524,16 @@ pub fn main() -> Result<(), JsValue> {
 
         // Handle online lobby state transitions
         if app.screen == Screen::OnlineLobby {
-            if let Some(ref net) = app.net {
+            if let Some(ref mut net) = app.net {
                 if net.is_connected() {
-                    // Connected to peer — determine player assignment
-                    // Lower peer ID is player 0
+                    // Connected to peer — host is always player 0.
+                    // The first client to connect becomes the "room creator" (host).
+                    // matchbox assigns peer IDs: we compare our socket ID to the remote's.
+                    // The peer with the lexically smaller ID is player 0.
                     if let Some(peer) = net.peer {
-                        let we_are_lower = format!("{:?}", peer) > "local".to_string();
-                        app.local_player = if we_are_lower { 0 } else { 1 };
+                        let local_id = net.local_id_string();
+                        let remote_id = format!("{peer}");
+                        app.local_player = if local_id < remote_id { 0 } else { 1 };
                         app.screen = Screen::CharSelect;
                         app.p1_ready = false;
                         app.p2_ready = false;
@@ -550,42 +562,55 @@ pub fn main() -> Result<(), JsValue> {
                         }
                     }
                     MSG_START_GAME => {
-                        if payload.len() >= 1 {
+                        if payload.len() >= 3 {
                             app.local_player = payload[0] as usize;
+                            // Use the canonical character assignment from the message
+                            app.p1_char = char_from_id(payload[1]);
+                            app.p2_char = char_from_id(payload[2]);
                             app.start_game();
                         }
                     }
                     _ => {}
                 }
             }
-            // If both ready in online mode, host (player 0) sends start
+            // If both ready in online mode, either side can trigger start
             if app.p1_ready && app.p2_ready && app.screen == Screen::CharSelect {
-                if app.local_player == 1 {
-                    let tmp = app.p1_char;
-                    app.p1_char = app.p2_char;
-                    app.p2_char = tmp;
-                    let tmp = app.p1_char_idx;
-                    app.p1_char_idx = app.p2_char_idx;
-                    app.p2_char_idx = tmp;
-                }
+                // p1_char = our local pick, p2_char = remote's pick
+                // Map to canonical player slots: local_player's slot gets our pick
+                let (p0_char, p1_char) = if app.local_player == 0 {
+                    (app.p1_char, app.p2_char)
+                } else {
+                    (app.p2_char, app.p1_char)
+                };
                 let remote_player = 1 - app.local_player;
                 if let Some(ref mut net) = app.net {
-                    net.send_start_game(remote_player as u8);
+                    net.send_start_game(remote_player as u8, p0_char as u8, p1_char as u8);
                 }
+                // Set canonical chars for start_game
+                app.p1_char = p0_char;
+                app.p2_char = p1_char;
                 app.start_game();
             }
         }
 
-        if app.screen == Screen::Fighting {
+        // Online mode: keep processing network messages even on GameOver
+        // so both clients stay in sync and the remote doesn't predict forever
+        let is_online_active = app.mode == GameMode::Online
+            && app.rollback.is_some()
+            && (app.screen == Screen::Fighting || app.screen == Screen::GameOver);
+
+        if app.screen == Screen::Fighting || is_online_active {
             while *accumulator.borrow() >= FRAME_TIME {
                 *accumulator.borrow_mut() -= FRAME_TIME;
 
                 match app.mode {
                     GameMode::Local => {
-                        let input = input_state.borrow();
-                        let inputs = [input.player_input(0), input.player_input(1)];
-                        drop(input);
-                        advance_frame(&mut app.game, inputs);
+                        if app.screen == Screen::Fighting {
+                            let input = input_state.borrow();
+                            let inputs = [input.player_input(0), input.player_input(1)];
+                            drop(input);
+                            advance_frame(&mut app.game, inputs);
+                        }
                     }
                     GameMode::Online => {
                         // Take rollback + net out to avoid borrow conflicts
@@ -618,25 +643,43 @@ pub fn main() -> Result<(), JsValue> {
                                 }
                             }
 
-                            // Add local input
-                            let input = input_state.borrow();
-                            let local_input = input.player_input(0);
-                            drop(input);
-                            let target_frame = rb.add_local_input(local_input);
+                            // Only advance simulation if match isn't over
+                            if !app.game.match_over {
+                                // Add local input
+                                let input = input_state.borrow();
+                                let local_input = input.player_input(0);
+                                drop(input);
+                                let target_frame = rb.add_local_input(local_input);
 
-                            // Advance simulation
-                            rb.advance();
-                            app.game = rb.state;
+                                // Advance simulation
+                                rb.advance();
+                                app.game = rb.state;
 
-                            // Send input + periodic checksum
-                            if let Some(ref mut n) = net {
-                                n.send_input(target_frame, [local_input.0; 3]);
+                                // Build redundant input packet: current + 2 previous frames
+                                let i0 = local_input.0;
+                                let i1 = if target_frame > 0 {
+                                    rb.local_input_for(target_frame - 1).unwrap_or(local_input).0
+                                } else { i0 };
+                                let i2 = if target_frame > 1 {
+                                    rb.local_input_for(target_frame - 2).unwrap_or(local_input).0
+                                } else { i0 };
 
-                                app.checksum_timer += 1;
-                                if app.checksum_timer >= CHECKSUM_INTERVAL && rb.last_confirmed_frame > 0 {
-                                    app.checksum_timer = 0;
-                                    let cf = rb.last_confirmed_frame;
-                                    n.send_checksum(cf, rb.checksum_for_frame(cf));
+                                // Send input + periodic checksum
+                                if let Some(ref mut n) = net {
+                                    n.send_input(target_frame, [i0, i1, i2]);
+
+                                    app.checksum_timer += 1;
+                                    if app.checksum_timer >= CHECKSUM_INTERVAL && rb.last_confirmed_frame > 0 {
+                                        app.checksum_timer = 0;
+                                        let cf = rb.last_confirmed_frame;
+                                        n.send_checksum(cf, rb.checksum_for_frame(cf));
+                                    }
+                                }
+                            } else {
+                                // Match is over — send empty inputs so remote can confirm
+                                let target = rb.current_frame + 2; // INPUT_DELAY
+                                if let Some(ref mut n) = net {
+                                    n.send_input(target, [0; 3]);
                                 }
                             }
                         }
@@ -647,7 +690,7 @@ pub fn main() -> Result<(), JsValue> {
                     }
                 }
             }
-            if app.game.match_over {
+            if app.game.match_over && app.screen == Screen::Fighting {
                 app.screen = Screen::GameOver;
             }
         } else {

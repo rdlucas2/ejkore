@@ -5,7 +5,7 @@ use matchbox_socket::{PeerId, WebRtcSocket};
 ///   input0 = latest_frame, input1 = latest_frame-1, input2 = latest_frame-2 (redundancy)
 /// Type 0x02 = CharSelect: [char_id: u8][ready: u8] = 3 bytes
 /// Type 0x03 = Checksum:   [frame: u32 LE][hash: u64 LE] = 13 bytes
-/// Type 0x04 = StartGame:  [local_player: u8] = 2 bytes
+/// Type 0x04 = StartGame:  [your_player_idx: u8][p0_char: u8][p1_char: u8] = 4 bytes
 
 pub const MSG_INPUT: u8 = 0x01;
 pub const MSG_CHAR_SELECT: u8 = 0x02;
@@ -108,13 +108,18 @@ impl NetworkManager {
         self.send(buf);
     }
 
-    /// Send game start signal with player assignment.
-    pub fn send_start_game(&mut self, remote_player_idx: u8) {
-        self.send(vec![MSG_START_GAME, remote_player_idx]);
+    /// Send game start signal with player assignment and character IDs.
+    pub fn send_start_game(&mut self, remote_player_idx: u8, p0_char: u8, p1_char: u8) {
+        self.send(vec![MSG_START_GAME, remote_player_idx, p0_char, p1_char]);
     }
 
     pub fn is_connected(&self) -> bool {
         self.connection_state == ConnectionState::Connected
+    }
+
+    /// Get a string representation of our local socket ID for comparison.
+    pub fn local_id_string(&mut self) -> String {
+        format!("{}", self.socket.id().expect("socket has no ID"))
     }
 }
 

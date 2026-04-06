@@ -131,6 +131,15 @@ impl RollbackManager {
         }
     }
 
+    /// Get the local player's confirmed input for a given frame (for redundant packets).
+    pub fn local_input_for(&self, frame: u32) -> Option<PlayerInput> {
+        if self.inputs.is_confirmed(frame, self.local_player) {
+            Some(self.inputs.get(frame)[self.local_player])
+        } else {
+            None
+        }
+    }
+
     /// Get the checksum for a confirmed frame (for sending to remote).
     pub fn checksum_for_frame(&self, frame: u32) -> u64 {
         state_checksum(&self.snapshots.load(frame))
